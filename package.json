@@ -1,0 +1,25 @@
+{
+  "name": "railway-quickbook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bangladesh Railway QuickBook - MV3 extension that prepares a booking before the window opens and executes the normal website flow without bypassing any security control.",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:pages && npm run build:content && npm run build:sw",
+    "build:pages": "vite build",
+    "build:content": "vite build --mode content",
+    "build:sw": "vite build --mode sw",
+    "watch": "npm run build -- --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@types/node": "^26.2.0",
+    "happy-dom": "^14.12.3",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0",
+    "vitest": "^2.0.5"
+  }
+}

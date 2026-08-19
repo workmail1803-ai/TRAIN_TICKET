@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Bangladesh Railway QuickBook",
+  "version": "0.1.0",
+  "description": "Prepares a railway booking before the window opens, then executes the normal website flow. Never bypasses CAPTCHA, OTP, payment authentication or account limits.",
+
+  "permissions": ["storage", "alarms"],
+  "optional_permissions": ["notifications"],
+
+  "host_permissions": ["https://eticket.railway.gov.bd/*"],
+
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://eticket.railway.gov.bd/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "Railway QuickBook"
+  },
+
+  "options_page": "src/options/options.html",
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

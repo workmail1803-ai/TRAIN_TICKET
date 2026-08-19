@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Railway QuickBook — Settings</title>
+    <link rel="stylesheet" href="./options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Bangladesh Railway QuickBook</h1>
+      <p class="lead">
+        Fill this in the night before. At ~07:50 you log in yourself, press <strong>ARM</strong>,
+        and the extension does the rest until a CAPTCHA or the payment step, where it stops and
+        hands the page back to you.
+      </p>
+
+      <section>
+        <h2>Journey</h2>
+        <div class="grid">
+          <label>From station<input id="from" type="text" placeholder="e.g. Rajshahi" /></label>
+          <label>To station<input id="to" type="text" placeholder="e.g. Dhaka" /></label>
+          <label>Date of journey<input id="date" type="date" /></label>
+          <label>Class used on the search form<select id="searchClass"></select></label>
+        </div>
+        <p class="hint">
+          Station names must match what the site accepts. If its field requires choosing from a
+          dropdown, type the name exactly as the site spells it.
+        </p>
+      </section>
+
+      <section>
+        <h2>Train priority</h2>
+        <div class="grid">
+          <label>1st choice<input id="train1" type="text" placeholder="e.g. DHUMKETU EXPRESS" /></label>
+          <label>2nd choice<input id="train2" type="text" placeholder="optional" /></label>
+          <label>3rd choice<input id="train3" type="text" placeholder="optional" /></label>
+        </div>
+        <p class="hint">
+          Partial names work — "Dhumketu" matches "DHUMKETU EXPRESS (770)". A train number on its
+          own works too.
+        </p>
+      </section>
+
+      <section>
+        <h2>Class priority</h2>
+        <div class="grid">
+          <label>1st choice<select id="class1"></select></label>
+          <label>2nd choice<select id="class2"></select></label>
+          <label>3rd choice<select id="class3"></select></label>
+        </div>
+        <p class="hint">
+          Only classes the site actually offers are selected. A class card is treated as bookable
+          only when the site renders its BOOK NOW button.
+        </p>
+      </section>
+
+      <section>
+        <h2>Seats</h2>
+        <div class="grid">
+          <label>How many seats<input id="targetSeats" type="number" min="1" max="4" /></label>
+          <label>If fewer are available
+            <select id="partial">
+              <option value="TAKE_AVAILABLE_THEN_STOP">Take what's available, then stop</option>
+              <option value="ALL_OR_NOTHING">Only proceed if all are available</option>
+              <option value="TAKE_AND_KEEP_TRYING">Take available, keep trying for the rest</option>
+            </select>
+          </label>
+          <label>Coach spread
+            <select id="coachSpread">
+              <option value="PREFER_SINGLE_ALLOW_SPLIT">Prefer one coach, split if needed</option>
+              <option value="SINGLE_ONLY">One coach only</option>
+              <option value="ANY">Any coaches</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">
+          Never set above what your account is allowed to buy. The extension does not attempt to
+          exceed the site's own limit and stops with the real error if the site refuses.
+        </p>
+      </section>
+
+      <section>
+        <h2>Timing</h2>
+        <div class="grid">
+          <label>Opening time (Asia/Dhaka)<input id="openTime" type="text" placeholder="08:00:00" /></label>
+          <label>Offset in ms<input id="offsetMs" type="number" step="10" /></label>
+          <label>Retries on "No train found"<input id="maxEmptyRetries" type="number" min="0" max="30" /></label>
+          <label>Gap between retries (ms)<input id="emptyRetryGapMs" type="number" step="50" min="150" /></label>
+          <label class="checkbox">
+            <input id="allowClockFallback" type="checkbox" />
+            Allow the clock alone to trigger, if the site gives no signal
+          </label>
+        </div>
+        <p class="hint">
+          The clock schedules; the site decides. Firing early is not free, so leave the offset at
+          0 until a dry run tells you otherwise.
+        </p>
+        <p class="hint">
+          The SEARCH TRAINS button is enabled at all times, so a search sent before the date is
+          released returns <em>"No train found for selected dates or cities"</em> rather than
+          failing. The retries above re-submit the same search while that message is showing —
+          about ten searches over four seconds by default. That is a handful of ordinary
+          searches, not a refresh loop; raising it a lot would be.
+        </p>
+      </section>
+
+      <section>
+        <h2>Passengers</h2>
+        <div id="passengers" class="passengers"></div>
+        <p class="hint">
+          Stored locally with <code>chrome.storage.local</code>. Passwords, card numbers, CVV, OTP
+          codes and CAPTCHA tokens are never stored — there are no fields for them.
+        </p>
+      </section>
+
+      <div class="actions">
+        <button id="save" class="primary" type="button">Save</button>
+        <span id="status" class="status"></span>
+      </div>
+
+      <div id="issues" class="issues hidden"></div>
+
+      <section class="note">
+        <h2>What this extension will not do</h2>
+        <ul>
+          <li>Solve, read, forward or bypass a CAPTCHA, OTP or any security check</li>
+          <li>Store or enter payment credentials, or automate payment authentication</li>
+          <li>Exceed the ticket limit your account is allowed</li>
+          <li>Refresh in a loop, fire concurrent requests, or touch any private endpoint</li>
+        </ul>
+      </section>
+    </main>
+
+    <script type="module" src="./options.ts"></script>
+  </body>
+</html>

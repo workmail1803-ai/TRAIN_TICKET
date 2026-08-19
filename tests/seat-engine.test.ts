@@ -1,0 +1,256 @@
+import { describe, expect, it, beforeEach } from 'vitest';
+import {
+  classifySeats,
+  findSeatElements,
+  parseCoachOption,
+  parseCoaches,
+  rankCoaches,
+  readClaimedSeats,
+  stateOf,
+} from '@/content/seat-engine';
+import { coachSelect, seatGrid, seatLegend } from './fixtures';
+import type { CoachOption } from '@/types';
+
+beforeEach(() => {
+  document.body.innerHTML = '';
+});
+
+describe('coach option parsing', () => {
+  it('extracts the code and the free-seat count from the option text', () => {
+    expect(parseCoachOption('JHA - 2 Seat(s)', 'JHA')).toEqual({
+      code: 'JHA',
+      freeSeats: 2,
+      value: 'JHA',
+      rawLabel: 'JHA - 2 Seat(s)',
+    });
+  });
+
+  it('handles zero and multi-digit counts', () => {
+    expect(parseCoachOption('KHA - 0 Seat(s)', 'KHA')?.freeSeats).toBe(0);
+    expect(parseCoachOption('SCHA - 27 Seat(s)', 'SCHA')?.freeSeats).toBe(27);
+  });
+
+  it('returns null rather than guessing on unexpected text', () => {
+    expect(parseCoachOption('Select a coach', '')).toBeNull();
+    expect(parseCoachOption('KHA', 'KHA')).toBeNull();
+  });
+
+  it('reads every coach from the select in one pass, no clicks needed', () => {
+    document.body.innerHTML = coachSelect();
+    const select = document.getElementById('coach') as HTMLSelectElement;
+    const coaches = parseCoaches(select);
+
+    expect(coaches).toHaveLength(8);
+    expect(coaches.map((c) => c.code)).toEqual(['KHA', 'GA', 'GHA', 'UMA', 'CHA', 'SCHA', 'JA', 'JHA']);
+    expect(coaches.find((c) => c.code === 'JHA')?.freeSeats).toBe(2);
+    expect(coaches.filter((c) => c.freeSeats > 0)).toHaveLength(1);
+  });
+});
+
+describe('coach ranking', () => {
+  const coaches: CoachOption[] = [
+    { code: 'KHA', freeSeats: 0, value: 'KHA', rawLabel: '' },
+    { code: 'GA', freeSeats: 2, value: 'GA', rawLabel: '' },
+    { code: 'GHA', freeSeats: 6, value: 'GHA', rawLabel: '' },
+    { code: 'JHA', freeSeats: 4, value: 'JHA', rawLabel: '' },
+    { code: 'CHA', freeSeats: 1, value: 'CHA', rawLabel: '' },
+  ];
+
+  it('prefers a single coach that fits the whole party, smallest sufficient first', () => {
+    const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT');
+    expect(ranked[0]!.code).toBe('JHA'); // exactly 4
+    expect(ranked[1]!.code).toBe('GHA'); // 6, also fits
+  });
+
+  it('still offers the smaller coaches so a split can reach the target', () => {
+    const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT');
+    expect(ranked.map((c) => c.code)).toEqual(['JHA', 'GHA', 'GA', 'CHA']);
+    expect(ranked.some((c) => c.code === 'KHA')).toBe(false); // empty coach never queued
+  });
+
+  it('SINGLE_ONLY refuses to split', () => {
+    const ranked = rankCoaches(coaches, 4, 'SINGLE_ONLY');
+    expect(ranked.map((c) => c.code)).toEqual(['JHA', 'GHA']);
+  });
+
+  it('ANY simply takes the roomiest first', () => {
+    const ranked = rankCoaches(coaches, 4, 'ANY');
+    expect(ranked.map((c) => c.code)).toEqual(['GHA', 'JHA', 'GA', 'CHA']);
+  });
+
+  it('returns nothing when every coach is empty', () => {
+    const empty = coaches.map((c) => ({ ...c, freeSeats: 0 }));
+    expect(rankCoaches(empty, 4, 'PREFER_SINGLE_ALLOW_SPLIT')).toHaveLength(0);
+  });
+});
+
+describe('seat element discovery', () => {
+  it('finds all 50 seats by their COACH-NUMBER label', () => {
+    document.body.innerHTML = `<div id="panel">${seatLegend()}${seatGrid('KHA', 50)}</div>`;
+    const panel = document.getElementById('panel') as HTMLElement;
+
+    const seats = findSeatElements(panel);
+    expect(seats).toHaveLength(50);
+    expect(seats[0]!.textContent).toBe('KHA-1');
+    expect(seats[49]!.textContent).toBe('KHA-50');
+  });
+
+  it('ignores the legend labels, which are not seats', () => {
+    document.body.innerHTML = `<div id="panel">${seatLegend()}${seatGrid('JHA', 4)}</div>`;
+    const panel = document.getElementById('panel') as HTMLElement;
+    const labels = findSeatElements(panel).map((el) => el.textContent);
+
+    expect(labels).toEqual(['JHA-1', 'JHA-2', 'JHA-3', 'JHA-4']);
+    expect(labels).not.toContain('Available');
+  });
+});
+
+/**
+ * Regression tests for the live failure that claimed 1 seat from a coach advertising 20 free.
+ * The old classifier grouped seats by class name and measured one representative per group, so
+ * a whole grid could receive a single verdict.
+ */
+describe('per-seat classification', () => {
+  const unusableLegend = { usable: false, colours: {} };
+
+  it('classifies each seat individually, not one verdict per class group', () => {
+    document.body.innerHTML = `
+      <div id="panel">
+        <button class="seat booked">DA-1</button>
+        <button class="seat booked">DA-2</button>
+        <button class="seat available">DA-3</button>
+        <button class="seat booked">DA-4</button>
+        <button class="seat available">DA-5</button>
+      </div>`;
+    const panel = document.getElementById('panel') as HTMLElement;
+
+    const cells = classifySeats(panel, unusableLegend);
+    const free = cells.filter((c) => c.state === 'AVAILABLE').map((c) => c.label);
+
+    expect(cells).toHaveLength(5);
+    expect(free).toEqual(['DA-3', 'DA-5']);
+  });
+
+  it('treats a disabled seat as booked regardless of anything else', () => {
+    document.body.innerHTML = `
+      <div id="panel"><button class="seat" disabled>DA-9</button></div>`;
+    const panel = document.getElementById('panel') as HTMLElement;
+
+    expect(classifySeats(panel, unusableLegend)[0]!.state).toBe('BOOKED');
+  });
+
+  it('reports UNKNOWN rather than guessing when nothing distinguishes the seats', () => {
+    document.body.innerHTML = `
+      <div id="panel">
+        <button class="seat">DA-1</button><button class="seat">DA-2</button>
+      </div>`;
+    const panel = document.getElementById('panel') as HTMLElement;
+
+    const cells = classifySeats(panel, unusableLegend);
+    expect(cells.every((c) => c.state === 'UNKNOWN')).toBe(true);
+  });
+
+  it('does not double-count a seat whose label sits inside the button', () => {
+    document.body.innerHTML = `
+      <div id="panel"><button class="seat available"><span>DA-7</span></button></div>`;
+    const panel = document.getElementById('panel') as HTMLElement;
+
+    const cells = classifySeats(panel, unusableLegend);
+    expect(cells).toHaveLength(1);
+    expect(cells[0]!.label).toBe('DA-7');
+  });
+});
+
+/**
+ * Losing a race for a seat is normal at 08:00. What matters is detecting it from the site's own
+ * signal - the seat flipping to Booked or In Progress - rather than paying a full timeout.
+ */
+describe('race outcome signals', () => {
+  const unusableLegend = { usable: false, colours: {} };
+
+  function seat(className: string): HTMLElement {
+    document.body.innerHTML = `<button class="${className}">DA-12</button>`;
+    return document.querySelector('button') as HTMLElement;
+  }
+
+  it('reads a seat someone else took as BOOKED', () => {
+    expect(stateOf(seat('seat booked'), unusableLegend)).toBe('BOOKED');
+  });
+
+  it('reads a seat someone else is holding as IN_PROGRESS', () => {
+    expect(stateOf(seat('seat in-progress'), unusableLegend)).toBe('IN_PROGRESS');
+  });
+
+  it('reads our own successful claim as SELECTED', () => {
+    expect(stateOf(seat('seat selected'), unusableLegend)).toBe('SELECTED');
+  });
+
+  it('reads a free seat as AVAILABLE', () => {
+    expect(stateOf(seat('seat available'), unusableLegend)).toBe('AVAILABLE');
+  });
+
+  it('treats a disabled seat as BOOKED whatever its classes say', () => {
+    document.body.innerHTML = `<button class="seat available" disabled>DA-12</button>`;
+    const el = document.querySelector('button') as HTMLElement;
+    expect(stateOf(el, unusableLegend)).toBe('BOOKED');
+  });
+
+  it('says UNKNOWN rather than guessing when nothing distinguishes it', () => {
+    expect(stateOf(seat('seat'), unusableLegend)).toBe('UNKNOWN');
+  });
+
+  it('never offers an In Progress seat as a candidate — someone else is mid-claim', () => {
+    document.body.innerHTML = `
+      <div id="panel">
+        <button class="seat available">DA-1</button>
+        <button class="seat in-progress">DA-2</button>
+        <button class="seat booked">DA-3</button>
+        <button class="seat available">DA-4</button>
+      </div>`;
+    const panel = document.getElementById('panel') as HTMLElement;
+
+    const free = classifySeats(panel, unusableLegend)
+      .filter((c) => c.state === 'AVAILABLE')
+      .map((c) => c.label);
+
+    expect(free).toEqual(['DA-1', 'DA-4']);
+  });
+});
+
+describe('reading the site Seat Details table', () => {
+  it('extracts the seats the site says we hold', () => {
+    document.body.innerHTML = `
+      <div id="details">
+        <h3>Seat Details</h3>
+        <table>
+          <tr><th>Class</th><th>Seats</th><th>Fare</th></tr>
+          <tr><td>S_CHAIR</td><td>DA-39</td><td>৳495.00</td></tr>
+          <tr><td>S_CHAIR</td><td>DA-44</td><td>৳495.00</td></tr>
+        </table>
+        <div>Total: ৳ 990</div>
+      </div>`;
+    const panel = document.getElementById('details') as HTMLElement;
+
+    expect(readClaimedSeats(panel).sort()).toEqual(['DA-39', 'DA-44']);
+  });
+
+  it('does not mistake the class name or the fare for a seat', () => {
+    document.body.innerHTML = `
+      <div id="details"><td>S_CHAIR</td><td>DA-39</td><td>৳495.00</td><div>Total: ৳ 495</div></div>`;
+    const panel = document.getElementById('details') as HTMLElement;
+
+    expect(readClaimedSeats(panel)).toEqual(['DA-39']);
+  });
+
+  it('returns nothing for an empty table, so a miscount cannot look like a claim', () => {
+    document.body.innerHTML = `
+      <div id="details"><h3>Seat Details</h3><div>Total: ৳ 0</div></div>`;
+    const panel = document.getElementById('details') as HTMLElement;
+
+    expect(readClaimedSeats(panel)).toEqual([]);
+  });
+
+  it('returns nothing when there is no panel at all', () => {
+    expect(readClaimedSeats(null)).toEqual([]);
+  });
+});

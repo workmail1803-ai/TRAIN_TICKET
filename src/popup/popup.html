@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Railway QuickBook</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Bangladesh Railway QuickBook</h1>
+      <button id="open-options" class="link" type="button">Settings</button>
+    </header>
+
+    <section class="journey">
+      <div id="route" class="route">—</div>
+      <div id="date" class="muted">—</div>
+    </section>
+
+    <dl class="facts">
+      <dt>Preferred train</dt>
+      <dd id="train">—</dd>
+      <dt>Class priority</dt>
+      <dd id="class">—</dd>
+      <dt>Seats</dt>
+      <dd id="seats">—</dd>
+    </dl>
+
+    <section id="status" class="status">
+      <span id="dot" class="dot"></span>
+      <span id="state">IDLE</span>
+      <span id="elapsed" class="muted"></span>
+    </section>
+
+    <p id="detail" class="detail"></p>
+
+    <div id="banner" class="banner hidden">
+      <strong id="banner-title">Your action required</strong>
+      <p id="banner-text"></p>
+      <button id="continue" type="button">I've done it — CONTINUE</button>
+    </div>
+
+    <div id="issues" class="issues hidden"></div>
+
+    <div class="actions">
+      <button id="arm" class="primary" type="button">ARM</button>
+      <button id="stop" class="danger" type="button">STOP</button>
+    </div>
+
+    <button id="run-now" class="go" type="button" disabled>
+      GO NOW — skip the countdown
+    </button>
+
+    <p id="clock" class="muted small"></p>
+    <p id="warn-hidden" class="warn small hidden">
+      This tab is in the background. Chrome throttles timers there — keep it focused.
+    </p>
+
+    <details>
+      <summary>Activity log</summary>
+      <ul id="log" class="log"></ul>
+    </details>
+
+    <script type="module" src="./popup.ts"></script>
+  </body>
+</html>
