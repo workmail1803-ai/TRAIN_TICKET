@@ -442,6 +442,82 @@ describe('a panel replaced between clicks', () => {
   });
 });
 
+/**
+ * The bug that burned 326 attempts on one label.
+ *
+ * The Seat Details summary lists held seats in plain cells whose text is exactly "UMA-1" —
+ * identical to a seat button's text. Those cells were scanned as seats, classified available,
+ * and then ranked FIRST by the adjacency rule, because a summary row for UMA-1 sits at distance
+ * zero from the claimed seat UMA-1. The engine clicked its own summary row, saw UMA-1 in the
+ * summary, and called it granted, over and over.
+ */
+describe('the Seat Details summary is not a seat grid', () => {
+  const unusableLegend = { usable: false, colours: {} };
+
+  function panelWithSummary(): HTMLElement {
+    document.body.innerHTML = `
+      <div id="panel">
+        <div class="grid">
+          <button class="btn-seat seat-selected seat-available">UMA-1</button>
+          <button class="btn-seat seat-available">UMA-2</button>
+          <button class="btn-seat seat-available">UMA-3</button>
+          <button class="btn-seat seat-booked">UMA-4</button>
+        </div>
+        <div id="details">
+          <h3>Seat Details</h3>
+          <table>
+            <tr><th>Class</th><th>Seats</th><th>Fare</th></tr>
+            <tr><td>SNIGDHA</td><td>UMA-1</td><td>৳750.00</td></tr>
+            <tr><td>SNIGDHA</td><td>SCHA-1</td><td>৳750.00</td></tr>
+          </table>
+        </div>
+        <button>CONTINUE PURCHASE</button>
+      </div>`;
+    return document.getElementById('panel') as HTMLElement;
+  }
+
+  it('counts only real seat buttons, not summary rows', () => {
+    const panel = panelWithSummary();
+    const details = document.getElementById('details') as HTMLElement;
+
+    // Without the exclusion the summary cells would inflate this to 6.
+    expect(findSeatElements(panel, details)).toHaveLength(4);
+  });
+
+  it('never offers a summary row as a free seat', () => {
+    const panel = panelWithSummary();
+    const details = document.getElementById('details') as HTMLElement;
+
+    const free = classifySeats(panel, unusableLegend, details)
+      .filter((c) => c.state === 'AVAILABLE')
+      .map((c) => c.label);
+
+    expect(free).toEqual(['UMA-2', 'UMA-3']);
+    expect(free).not.toContain('UMA-1'); // held, and listed in the summary
+    expect(free).not.toContain('SCHA-1'); // only ever existed in the summary
+  });
+
+  it('does not re-pick a seat it already holds', () => {
+    const panel = panelWithSummary();
+    const details = document.getElementById('details') as HTMLElement;
+    const free = classifySeats(panel, unusableLegend, details).filter((c) => c.state === 'AVAILABLE');
+
+    // Adjacency would rank a "UMA-1" summary row at distance zero from claimed UMA-1.
+    expect(pickCandidate(free, ['UMA-1', 'SCHA-1'])?.label).toBe('UMA-2');
+  });
+
+  it('ignores non-interactive elements that merely look like seat labels', () => {
+    document.body.innerHTML = `
+      <div id="panel">
+        <td>UMA-9</td><span>CHA-4</span><div>JA-7</div>
+        <button class="btn-seat seat-available">UMA-2</button>
+      </div>`;
+    const panel = document.getElementById('panel') as HTMLElement;
+
+    expect(findSeatElements(panel).map((el) => el.textContent)).toEqual(['UMA-2']);
+  });
+});
+
 describe('reading the site Seat Details table', () => {
   it('extracts the seats the site says we hold', () => {
     document.body.innerHTML = `

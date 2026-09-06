@@ -75,7 +75,7 @@ export function rankCoaches(
   coaches: CoachOption[],
   remaining: number,
   policy: CoachSpreadPolicy,
-  preferredCoach = ''
+  preferredCoach = '',
 ): CoachOption[] {
   const withSeats = coaches.filter((c) => c.freeSeats > 0);
 
@@ -138,8 +138,14 @@ export interface Legend {
 
 function swatchColour(labelEl: HTMLElement): RGB | null {
   const probes: Array<() => string | null> = [
-    () => (labelEl.previousElementSibling ? getComputedStyle(labelEl.previousElementSibling).backgroundColor : null),
-    () => (labelEl.firstElementChild ? getComputedStyle(labelEl.firstElementChild).backgroundColor : null),
+    () =>
+      labelEl.previousElementSibling
+        ? getComputedStyle(labelEl.previousElementSibling).backgroundColor
+        : null,
+    () =>
+      labelEl.firstElementChild
+        ? getComputedStyle(labelEl.firstElementChild).backgroundColor
+        : null,
     () => getComputedStyle(labelEl, '::before').backgroundColor,
     () => {
       const first = labelEl.parentElement?.firstElementChild;
@@ -172,7 +178,7 @@ export function readLegend(panel: HTMLElement): Legend {
 
   for (const [state, label] of wanted) {
     const el = Array.from(panel.querySelectorAll<HTMLElement>('span, div, label, li, p')).find(
-      (candidate) => candidate.children.length === 0 && normText(candidate.textContent) === label
+      (candidate) => candidate.children.length === 0 && normText(candidate.textContent) === label,
     );
     if (!el) continue;
     const colour = swatchColour(el);
@@ -194,7 +200,7 @@ export function readLegend(panel: HTMLElement): Legend {
   if (!distinct) {
     logger.warn(
       `Seat legend not usable (${entries.length} swatches resolved, not mutually distinct). ` +
-        'Falling back to attribute and class-name hints.'
+        'Falling back to attribute and class-name hints.',
     );
   }
   return { usable: distinct, colours };
@@ -223,18 +229,54 @@ function classifyByHints(el: HTMLElement): SeatState | null {
   return null;
 }
 
-/** All seat buttons currently rendered, matched by the "COACH-NUMBER" text pattern. */
-export function findSeatElements(panel: HTMLElement): HTMLElement[] {
-  const scan = panel.querySelectorAll<HTMLElement>('button, a, div, span, li, td');
-  const hits: HTMLElement[] = [];
+/**
+ * All seat buttons currently rendered, matched by the "COACH-NUMBER" text pattern.
+ *
+ * `exclude` is normally the Seat Details panel - see below.
+ */
+export function findSeatElements(panel: HTMLElement, exclude?: HTMLElement | null): HTMLElement[] {
+  const collect = (skip: HTMLElement | null): HTMLElement[] => {
+    const scan = panel.querySelectorAll<HTMLElement>('button, a, div, span, li, td');
+    const hits: HTMLElement[] = [];
+    const seen = new Set<HTMLElement>();
 
-  for (const el of Array.from(scan)) {
-    if (el.children.length > 0) continue; // seat labels are leaf nodes
-    // Regex before visibility: the check that forces layout runs only on real candidates.
-    if (!PATTERNS.seatLabel.test((el.textContent ?? '').trim())) continue;
-    if (!isVisible(el)) continue;
-    hits.push(el);
-  }
+    for (const el of Array.from(scan)) {
+      if (el.children.length > 0) continue; // seat labels are leaf nodes
+      // Regex before visibility: the check that forces layout runs only on real candidates.
+      if (!PATTERNS.seatLabel.test((el.textContent ?? '').trim())) continue;
+
+      /**
+       * A seat is interactive; the summary of seats you already hold is not.
+       *
+       * The Seat Details table lists held seats in plain cells whose text is also exactly
+       * "UMA-1". Those cells were being scanned as seats. Having no seat classes they fell
+       * through to the colour check, matched the white "available" swatch, and joined the free
+       * list - where the adjacency rule then ranked them first, because a summary row for UMA-1
+       * sits at distance zero from the claimed seat UMA-1.
+       *
+       * The engine therefore clicked its own summary row, saw UMA-1 in the summary, and called
+       * it granted. One live run burned 326 attempts on that single label and finished 3/4.
+       */
+      const target = el.matches('button, a') ? el : (el.closest('button, a') as HTMLElement | null);
+      if (!target) continue;
+      if (skip && skip.contains(target)) continue;
+      if (!isVisible(target)) continue;
+      if (seen.has(target)) continue;
+
+      seen.add(target);
+      hits.push(el);
+    }
+    return hits;
+  };
+
+  const hits = collect(exclude ?? null);
+
+  /**
+   * The exclusion is belt-and-braces on top of the "seats are interactive" rule, so it must
+   * never be the thing that empties the grid. If the summary panel resolved to a container that
+   * happens to wrap the seats, ignore it rather than reporting a coach with no seats.
+   */
+  if (hits.length === 0 && exclude) return collect(null);
   return hits;
 }
 
@@ -278,7 +320,11 @@ export function stateOf(element: HTMLElement, legend: Legend): SeatState {
   return bestDistance <= COLOUR_MATCH_THRESHOLD ? bestState : 'UNKNOWN';
 }
 
-export function classifySeats(panel: HTMLElement, legend: Legend): SeatCell[] {
+export function classifySeats(
+  panel: HTMLElement,
+  legend: Legend,
+  exclude?: HTMLElement | null,
+): SeatCell[] {
   interface Row {
     target: HTMLElement;
     label: string;
@@ -289,12 +335,14 @@ export function classifySeats(panel: HTMLElement, legend: Legend): SeatCell[] {
   const rows: Row[] = [];
   const seen = new Set<HTMLElement>();
 
-  for (const el of findSeatElements(panel)) {
+  for (const el of findSeatElements(panel, exclude)) {
     const raw = (el.textContent ?? '').trim();
     const match = PATTERNS.seatLabel.exec(raw);
     if (!match?.[1] || match[2] === undefined) continue;
 
-    const target = el.matches('button, a') ? el : ((el.closest('button, a') as HTMLElement | null) ?? el);
+    const target = el.matches('button, a')
+      ? el
+      : ((el.closest('button, a') as HTMLElement | null) ?? el);
     if (seen.has(target)) continue;
     seen.add(target);
 
@@ -337,7 +385,9 @@ export function readClaimedSeats(detailsPanel: HTMLElement | null): string[] {
   if (!detailsPanel) return [];
 
   const found = new Set<string>();
-  for (const el of Array.from(detailsPanel.querySelectorAll<HTMLElement>('td, div, span, li, p, strong'))) {
+  for (const el of Array.from(
+    detailsPanel.querySelectorAll<HTMLElement>('td, div, span, li, p, strong'),
+  )) {
     if (el.children.length > 0) continue;
     for (const token of (el.textContent ?? '').trim().split(/[,\s]+/)) {
       if (PATTERNS.seatLabel.test(token)) found.add(token.toUpperCase().replace(/\s+/g, ''));
@@ -351,11 +401,7 @@ export function readClaimedSeats(detailsPanel: HTMLElement | null): string[] {
 // ---------------------------------------------------------------------------
 
 export type ClaimStopReason =
-  | 'TARGET_REACHED'
-  | 'NO_MORE_SEATS'
-  | 'UNCLASSIFIABLE'
-  | 'ABORTED'
-  | 'PANEL_LOST';
+  'TARGET_REACHED' | 'NO_MORE_SEATS' | 'UNCLASSIFIABLE' | 'ABORTED' | 'PANEL_LOST';
 
 export interface ClaimOutcome {
   confirmed: string[];
@@ -438,8 +484,12 @@ function refreshHandles(context: ClaimContext): void {
 }
 
 /** Find a seat by its label in the panel as it exists right now. */
-function findSeatByLabel(panel: HTMLElement, label: string): HTMLElement | null {
-  for (const element of findSeatElements(panel)) {
+function findSeatByLabel(
+  panel: HTMLElement,
+  label: string,
+  exclude?: HTMLElement | null,
+): HTMLElement | null {
+  for (const element of findSeatElements(panel, exclude)) {
     if ((element.textContent ?? '').trim().toUpperCase().replace(/\s+/g, '') === label) {
       return element;
     }
@@ -450,7 +500,7 @@ function findSeatByLabel(panel: HTMLElement, label: string): HTMLElement | null 
 async function awaitSeatOutcome(
   context: ClaimContext,
   seat: SeatCell,
-  legend: Legend
+  legend: Legend,
 ): Promise<SeatOutcome> {
   const outcome = await waitFor<SeatOutcome>(
     () => {
@@ -472,7 +522,7 @@ async function awaitSeatOutcome(
        */
       const live = seat.element.isConnected
         ? seat.element
-        : findSeatByLabel(context.panel, seat.label);
+        : findSeatByLabel(context.panel, seat.label, context.detailsPanel);
 
       // Not re-rendered yet - keep waiting rather than concluding anything.
       if (!live) return null;
@@ -494,7 +544,7 @@ async function awaitSeatOutcome(
       scope: context.panel,
       signal: context.signal,
       pollMs: 40,
-    }
+    },
   ).catch(() => 'TIMEOUT' as SeatOutcome);
 
   return outcome;
@@ -541,7 +591,10 @@ async function switchCoach(context: ClaimContext, coach: CoachOption): Promise<b
  * of consecutive free seats. On this site the grid is laid out 2 + aisle + 3, so consecutive seat
  * numbers are physically adjacent.
  */
-export function pickCandidate(free: SeatCell[], claimedLabels: string[] = []): SeatCell | undefined {
+export function pickCandidate(
+  free: SeatCell[],
+  claimedLabels: string[] = [],
+): SeatCell | undefined {
   if (free.length === 0) return undefined;
 
   const sorted = [...free].sort((a, b) => a.number - b.number);
@@ -626,7 +679,8 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
 
   for (let sweep = 0; sweep < MAX_SWEEPS; sweep++) {
     if (confirmed.length >= context.targetSeats) break;
-    if (context.signal?.aborted) return { confirmed, attempted, coachesTried, stopReason: 'ABORTED' };
+    if (context.signal?.aborted)
+      return { confirmed, attempted, coachesTried, stopReason: 'ABORTED' };
     if (performance.now() > deadline) break;
     if (!context.panel.isConnected) {
       return { confirmed, attempted, coachesTried, stopReason: 'PANEL_LOST' };
@@ -663,7 +717,7 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
       logger.info(
         favourite && favourite.freeSeats > 0
           ? `Preferred coach ${favourite.code} has ${favourite.freeSeats} free seat(s) - trying it first`
-          : `Preferred coach ${preferred.toUpperCase()} has no free seats - using the next available coach`
+          : `Preferred coach ${preferred.toUpperCase()} has no free seats - using the next available coach`,
       );
     }
 
@@ -672,7 +726,7 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
     if (sweep > 0) {
       logger.info(
         `Sweep ${sweep + 1}: still ${remaining} seat(s) short, re-checking ` +
-          `${coaches.filter((c) => c.freeSeats > 0).length} coach(es) with free seats`
+          `${coaches.filter((c) => c.freeSeats > 0).length} coach(es) with free seats`,
       );
     }
 
@@ -695,13 +749,13 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
        * cause is identifiable rather than guessed at.
        */
       if (coach && coachesTried.length > 0 && confirmed.length < context.targetSeats) {
-        const stillFree = classifySeats(context.panel, legend).filter(
-          (c) => c.state === 'AVAILABLE' && !rejected.has(c.label)
+        const stillFree = classifySeats(context.panel, legend, context.detailsPanel).filter(
+          (c) => c.state === 'AVAILABLE' && !rejected.has(c.label),
         );
         if (stillFree.length > 0) {
           logger.warn(
             `Switching to ${coach.code} while the previous coach still shows ` +
-              `${stillFree.length} selectable seat(s) - this should not happen, please report the log`
+              `${stillFree.length} selectable seat(s) - this should not happen, please report the log`,
           );
         }
       }
@@ -739,7 +793,7 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
          * other users release holds while we work. A stale list meant later clicks landed on
          * detached nodes and silently did nothing.
          */
-        let cells = classifySeats(context.panel, legend);
+        let cells = classifySeats(context.panel, legend, context.detailsPanel);
 
         /**
          * An empty grid usually means our panel handle went stale, not that the coach filled up.
@@ -753,14 +807,19 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
             context.panel = fresh.panel;
             context.detailsPanel = fresh.detailsPanel;
             context.coachSelect = fresh.coachSelect;
-            cells = classifySeats(context.panel, legend);
+            cells = classifySeats(context.panel, legend, context.detailsPanel);
             logger.info('Seat panel was replaced - re-resolved and staying in the same coach');
           }
         }
 
         if (cells.length > 0 && cells.every((c) => c.state === 'UNKNOWN')) {
           logger.error('Seat states could not be classified - stopping instead of clicking blind');
-          return { confirmed, attempted, coachesTried, stopReason: 'UNCLASSIFIABLE' };
+          return {
+            confirmed,
+            attempted,
+            coachesTried,
+            stopReason: 'UNCLASSIFIABLE',
+          };
         }
 
         /**
@@ -782,12 +841,12 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
         if (pass === 0) {
           const advertised = coach ? `${coach.freeSeats} advertised` : 'count unknown';
           logger.info(
-            `Coach ${coach?.code ?? '(current)'}: ${free.length} selectable of ${cells.length} seats (${advertised})`
+            `Coach ${coach?.code ?? '(current)'}: ${free.length} selectable of ${cells.length} seats (${advertised})`,
           );
           if (coach && coach.freeSeats > 0 && free.length === 0) {
             logger.warn(
               `Coach ${coach.code} advertises ${coach.freeSeats} free seats but none read as ` +
-                'selectable. Either they were just taken, or seat colours are not being read correctly.'
+                'selectable. Either they were just taken, or seat colours are not being read correctly.',
             );
           }
         }
@@ -798,7 +857,7 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
         if (!seat) {
           logger.info(
             `Coach ${coach?.code ?? '(current)'}: no more selectable seats - ` +
-              `${confirmed.length}/${context.targetSeats} secured, ${cells.length} seats scanned`
+              `${confirmed.length}/${context.targetSeats} secured, ${cells.length} seats scanned`,
           );
           break;
         }
@@ -839,7 +898,7 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
           logger.info(
             outcome === 'LOST'
               ? `Lost the race for ${seat.label} - taking another seat immediately`
-              : `No response for ${seat.label} - treating as taken and moving on`
+              : `No response for ${seat.label} - treating as taken and moving on`,
           );
         }
       }
@@ -847,7 +906,9 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
   }
 
   if (lostRaces >= 5) {
-    logger.warn(`${lostRaces} consecutive seats lost to other users - the coach is heavily contested`);
+    logger.warn(
+      `${lostRaces} consecutive seats lost to other users - the coach is heavily contested`,
+    );
   }
 
   // Final reconciliation: whatever the site says we hold is what we hold.
@@ -899,7 +960,10 @@ export function resolveSeatPanel(): SeatPanelHandles | null {
     panel,
     coachSelect,
     detailsPanel,
-    boardingSelect: (findAll(SEATS.boardingStation, { root: panel })[0] as HTMLSelectElement | null) ?? null,
+    boardingSelect:
+      (findAll(SEATS.boardingStation, {
+        root: panel,
+      })[0] as HTMLSelectElement | null) ?? null,
     continueButton,
   };
 }
