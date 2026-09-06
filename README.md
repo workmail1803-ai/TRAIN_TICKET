@@ -94,6 +94,10 @@ Facts established from screenshots and live runs. They shaped the whole design:
 - **The Seat Details table is the source of truth** for what you hold. Local click bookkeeping can
   be wrong in both directions — a slow grant looks like a refusal, a colour read can mislead — so
   every count is reconciled against the site's own summary.
+- **Selecting a seat makes no server call.** Seat state is client-side until CONTINUE PURCHASE;
+  that submit is the only contended request before payment. Seat state is expressed as explicit
+  CSS classes (`seat-available` / `seat-booked` / `seat-selected`), so no colour matching is
+  needed. See [`docs/04-network-findings.md`](docs/04-network-findings.md).
 - **`SEARCH TRAINS` is enabled at all times.** A search sent before the date is released does not
   fail; it returns *"No train found for selected dates or cities."* This is the single most
   important quirk in the project — see [Timing](#timing).
@@ -173,8 +177,8 @@ booking.
 | `chrome.storage` writes debounced 250 ms | Several transitions fire back-to-back at T0, each previously issuing a write |
 
 At T0 the remaining work is: confirm the button is unobstructed, dispatch a click. Everything
-after that is the server — in particular the sequential seat confirmations, which dominate a real
-booking and which no browser extension can shorten.
+after that is the server — a single search request, since the results page carries the trains,
+classes, coaches and every seat map in one response.
 
 The popup's **Activity log** prints measured stage-to-stage timings for every run. Those numbers
 are real; nothing in this README substitutes for them.

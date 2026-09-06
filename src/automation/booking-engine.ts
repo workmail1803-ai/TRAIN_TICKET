@@ -19,6 +19,7 @@ import {
 } from '@/content/results-parser';
 import { claimSeats, readClaimedSeats, resolveSeatPanel } from '@/content/seat-engine';
 import { detectPage, detectSession, findNotOpenNotice } from '@/content/page-detector';
+import { runPreflight } from '@/content/preflight';
 import { detectPayment, detectSecurity } from '@/content/security-detector';
 import { hasConfirmationMarker, parseConfirmation } from '@/content/confirmation-parser';
 import { clearRunState, loadConfig, saveResult, saveRunState, validateConfig } from '@/storage/storage-manager';
@@ -325,6 +326,44 @@ export class BookingEngine {
       throw new SafeStop('validation failed');
     }
     logger.info(`Config validated - ${config.seatPolicy.targetSeats} seat(s), ${config.passengers.length} profiles`);
+
+    /**
+     * Pre-flight against the live site.
+     *
+     * validateConfig only proves the fields are filled in. This proves they match something the
+     * site actually serves - the check that would have saved the run lost to
+     * "BANALATA EXPRESS (792)" on a route that lists (791).
+     */
+    const preflight = await runPreflight(config, this.siteOrigin, signal);
+    this.assertRunning(signal);
+
+    for (const issue of preflight.issues) logger.warn(`Pre-flight: ${issue.message}`);
+    if (preflight.issues.length > 0) {
+      this.issues = [...this.issues, ...preflight.issues];
+      this.emit();
+    }
+
+    if (preflight.routeBroken) {
+      const detail = preflight.issues.map((i) => i.message).join(' ');
+      this.fail(`Pre-flight failed. ${detail}`);
+      throw new SafeStop('preflight: route not verifiable');
+    }
+
+    // Fatal only when NOTHING usable remains. One unmatched alternative may simply not run on
+    // the probed day; zero matches means 08:00 would certainly fail.
+    if (preflight.labelsSeen.length > 0 && preflight.matched.length === 0) {
+      this.fail(
+        `None of your preferred trains run on this route. ` +
+          `The site lists: ${preflight.labelsSeen.join(', ')}. Fix the train names and re-arm.`
+      );
+      throw new SafeStop('preflight: no preferred train on route');
+    }
+
+    if (preflight.matched.length > 0) {
+      logger.info(
+        `Pre-flight OK - ${preflight.matched.join(', ')} present on ${preflight.probedDateIso}`
+      );
+    }
 
     // Clock sync: a coarse offset, then a refinement that pins the server's second boundary.
     // Both happen here, long before the window; neither is repeated inside it.
