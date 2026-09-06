@@ -81,9 +81,10 @@ export function rankCoaches(
 
   const byPolicy = (): CoachOption[] => {
     if (policy === 'SINGLE_ONLY') {
+      // Roomiest first, for the same reason as below: slack is what makes a row possible.
       return withSeats
         .filter((c) => c.freeSeats >= remaining)
-        .sort((a, b) => a.freeSeats - b.freeSeats);
+        .sort((a, b) => b.freeSeats - a.freeSeats);
     }
     if (policy === 'ANY') {
       return withSeats.sort((a, b) => b.freeSeats - a.freeSeats);
@@ -91,9 +92,16 @@ export function rankCoaches(
 
     const fits = withSeats
       .filter((c) => c.freeSeats >= remaining)
-      // Smallest sufficient coach first: leaves the roomier coaches for other parties and
-      // makes no difference to us.
-      .sort((a, b) => a.freeSeats - b.freeSeats);
+      /**
+       * Roomiest sufficient coach first.
+       *
+       * This used to pick the SMALLEST coach that could seat the party, on the reasoning that it
+       * left roomier coaches for other people. That was a nicety with a real cost: a coach with
+       * exactly enough seats has no slack, so a single seat taken concurrently forces a split,
+       * and four seats in a row are far less likely to exist. Roomiest-first keeps the party
+       * together and makes an unbroken row much more likely.
+       */
+      .sort((a, b) => b.freeSeats - a.freeSeats);
     const rest = withSeats
       .filter((c) => c.freeSeats < remaining)
       .sort((a, b) => b.freeSeats - a.freeSeats);
@@ -480,16 +488,61 @@ async function switchCoach(context: ClaimContext, coach: CoachOption): Promise<b
  * pattern and the site's own hold logic would reject them anyway.
  */
 /**
- * Choose which free seat to attempt.
+ * Choose which free seat to attempt, preferring seats together.
  *
- * Randomised rather than always taking the first one on the grid. Under contention everybody
- * scanning top-left collides on the same seat; spreading the choice across the free seats makes
- * a head-on race less likely. It is the same decision a person makes when picking a seat, and it
- * changes nothing about what the server allows - it only avoids everyone queueing for seat 1.
+ * This was previously randomised, to avoid every bot colliding on the top-left seat. The network
+ * capture showed that reasoning was wrong: selecting a seat makes no server call at all, so there
+ * is nothing to collide with - the contended moment is CONTINUE PURCHASE. Randomising therefore
+ * bought nothing and scattered the party across the coach.
+ *
+ * Now: continue the run we have already started, otherwise open at the head of the longest block
+ * of consecutive free seats. On this site the grid is laid out 2 + aisle + 3, so consecutive seat
+ * numbers are physically adjacent.
  */
-function pickCandidate(free: SeatCell[]): SeatCell | undefined {
-  if (free.length <= 1) return free[0];
-  return free[Math.floor(Math.random() * free.length)];
+export function pickCandidate(free: SeatCell[], claimedLabels: string[] = []): SeatCell | undefined {
+  if (free.length === 0) return undefined;
+
+  const sorted = [...free].sort((a, b) => a.number - b.number);
+  const coach = sorted[0]!.coach;
+
+  // Numbers we already hold in THIS coach - seats in another coach say nothing about adjacency.
+  const claimed = claimedLabels
+    .map((label) => PATTERNS.seatLabel.exec(label.trim()))
+    .filter((m): m is RegExpExecArray => !!m && (m[1] ?? '').toUpperCase() === coach)
+    .map((m) => Number(m[2]));
+
+  if (claimed.length > 0) {
+    let best = sorted[0]!;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (const seat of sorted) {
+      const gap = Math.min(...claimed.map((n) => Math.abs(n - seat.number)));
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = seat;
+      }
+    }
+    return best;
+  }
+
+  // Nothing claimed yet: start where the longest unbroken run begins.
+  let bestStart = sorted[0]!;
+  let bestLength = 1;
+  let runStart = sorted[0]!;
+  let runLength = 1;
+
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i]!.number === sorted[i - 1]!.number + 1) {
+      runLength++;
+    } else {
+      runStart = sorted[i]!;
+      runLength = 1;
+    }
+    if (runLength > bestLength) {
+      bestLength = runLength;
+      bestStart = runStart;
+    }
+  }
+  return bestStart;
 }
 
 /** Wall-clock budget for the whole seat stage. */
@@ -588,6 +641,26 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
         return { confirmed, attempted, coachesTried, stopReason: 'PANEL_LOST' };
       }
 
+      /**
+       * Leaving a coach that still has room is always a bug.
+       *
+       * A run was observed taking one seat each from three coaches while a coach with 25 free
+       * seats sat unused. This does not skip the switch - skipping could end the run with nothing
+       * claimed, which is worse than spreading - but it makes the mistake loud in the log so the
+       * cause is identifiable rather than guessed at.
+       */
+      if (coach && coachesTried.length > 0 && confirmed.length < context.targetSeats) {
+        const stillFree = classifySeats(context.panel, legend).filter(
+          (c) => c.state === 'AVAILABLE' && !rejected.has(c.label)
+        );
+        if (stillFree.length > 0) {
+          logger.warn(
+            `Switching to ${coach.code} while the previous coach still shows ` +
+              `${stillFree.length} selectable seat(s) - this should not happen, please report the log`
+          );
+        }
+      }
+
       if (coach) {
         if (!coachesTried.includes(coach.code)) coachesTried.push(coach.code);
         const switched = await switchCoach(context, coach);
@@ -621,7 +694,24 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
          * other users release holds while we work. A stale list meant later clicks landed on
          * detached nodes and silently did nothing.
          */
-        const cells = classifySeats(context.panel, legend);
+        let cells = classifySeats(context.panel, legend);
+
+        /**
+         * An empty grid usually means our panel handle went stale, not that the coach filled up.
+         * Angular re-renders the panel subtree as seats are picked; if we abandoned the coach on
+         * an empty read we would hop to the next coach after a single seat - which is exactly the
+         * "one seat per coach" behaviour reported. Re-resolve once and stay put.
+         */
+        if (cells.length === 0) {
+          const fresh = resolveSeatPanel();
+          if (fresh && fresh.panel !== context.panel) {
+            context.panel = fresh.panel;
+            context.detailsPanel = fresh.detailsPanel;
+            context.coachSelect = fresh.coachSelect;
+            cells = classifySeats(context.panel, legend);
+            logger.info('Seat panel was replaced - re-resolved and staying in the same coach');
+          }
+        }
 
         if (cells.length > 0 && cells.every((c) => c.state === 'UNKNOWN')) {
           logger.error('Seat states could not be classified - stopping instead of clicking blind');
@@ -643,8 +733,16 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
           }
         }
 
-        const seat = pickCandidate(free);
-        if (!seat) break;
+        // Pass what we already hold so the next seat continues the row rather than starting
+        // somewhere else in the coach.
+        const seat = pickCandidate(free, confirmed);
+        if (!seat) {
+          logger.info(
+            `Coach ${coach?.code ?? '(current)'}: no more selectable seats - ` +
+              `${confirmed.length}/${context.targetSeats} secured, ${cells.length} seats scanned`
+          );
+          break;
+        }
 
         attempted++;
         realClick(seat.element);

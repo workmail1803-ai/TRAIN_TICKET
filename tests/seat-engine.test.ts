@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import {
   claimSeats,
   classifySeats,
+  pickCandidate,
   findSeatElements,
   parseCoachOption,
   parseCoaches,
@@ -57,21 +58,23 @@ describe('coach ranking', () => {
     { code: 'CHA', freeSeats: 1, value: 'CHA', rawLabel: '' },
   ];
 
-  it('prefers a single coach that fits the whole party, smallest sufficient first', () => {
+  it('prefers the roomiest coach that fits the whole party', () => {
+    // Roomiest, not smallest-sufficient: slack is what makes four seats in a row possible and
+    // survives a seat being taken concurrently.
     const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT');
-    expect(ranked[0]!.code).toBe('JHA'); // exactly 4
-    expect(ranked[1]!.code).toBe('GHA'); // 6, also fits
+    expect(ranked[0]!.code).toBe('GHA'); // 6 free
+    expect(ranked[1]!.code).toBe('JHA'); // 4 free, also fits
   });
 
   it('still offers the smaller coaches so a split can reach the target', () => {
     const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT');
-    expect(ranked.map((c) => c.code)).toEqual(['JHA', 'GHA', 'GA', 'CHA']);
+    expect(ranked.map((c) => c.code)).toEqual(['GHA', 'JHA', 'GA', 'CHA']);
     expect(ranked.some((c) => c.code === 'KHA')).toBe(false); // empty coach never queued
   });
 
   it('SINGLE_ONLY refuses to split', () => {
     const ranked = rankCoaches(coaches, 4, 'SINGLE_ONLY');
-    expect(ranked.map((c) => c.code)).toEqual(['JHA', 'GHA']);
+    expect(ranked.map((c) => c.code)).toEqual(['GHA', 'JHA']);
   });
 
   it('ANY simply takes the roomiest first', () => {
@@ -92,13 +95,13 @@ describe('coach ranking', () => {
 
     it('falls through to the next available coach when the preferred one is full', () => {
       const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT', 'KHA'); // KHA has 0
-      expect(ranked[0]!.code).toBe('JHA'); // normal ranking resumes
+      expect(ranked[0]!.code).toBe('GHA'); // normal ranking resumes: roomiest first
       expect(ranked.some((c) => c.code === 'KHA')).toBe(false);
     });
 
     it('is a preference, not a restriction — every other coach still follows', () => {
       const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT', 'GA');
-      expect(ranked.map((c) => c.code)).toEqual(['GA', 'JHA', 'GHA', 'CHA']);
+      expect(ranked.map((c) => c.code)).toEqual(['GA', 'GHA', 'JHA', 'CHA']);
     });
 
     it('matches case-insensitively', () => {
@@ -107,7 +110,7 @@ describe('coach ranking', () => {
 
     it('ignores a coach code that does not exist on this train', () => {
       const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT', 'ZZZ');
-      expect(ranked.map((c) => c.code)).toEqual(['JHA', 'GHA', 'GA', 'CHA']);
+      expect(ranked.map((c) => c.code)).toEqual(['GHA', 'JHA', 'GA', 'CHA']);
     });
 
     it('leaves the order untouched when no preference is set', () => {
@@ -119,7 +122,7 @@ describe('coach ranking', () => {
     it('still respects SINGLE_ONLY — a preferred coach too small is not promoted', () => {
       // GA has 2 free and the party needs 4, so SINGLE_ONLY excludes it entirely.
       const ranked = rankCoaches(coaches, 4, 'SINGLE_ONLY', 'GA');
-      expect(ranked.map((c) => c.code)).toEqual(['JHA', 'GHA']);
+      expect(ranked.map((c) => c.code)).toEqual(['GHA', 'JHA']);
     });
   });
 });
@@ -311,6 +314,49 @@ describe('claiming without a Seat Details panel', () => {
 
     expect(outcome.confirmed).toHaveLength(2);
     expect(outcome.stopReason).toBe('NO_MORE_SEATS');
+  });
+});
+
+/**
+ * A live run produced UMA-53, CHA-66, SCHA-19, UMA-31 — four seats across three coaches, none
+ * adjacent, while a coach with 25 free seats went unused. Seat picking was randomised at the
+ * time, on the belief that seat clicks raced other users. The network capture disproved that:
+ * selecting a seat makes no server call, so the randomisation bought nothing.
+ */
+describe('seat adjacency', () => {
+  const seat = (coach: string, number: number): never =>
+    ({ label: `${coach}-${number}`, coach, number, state: 'AVAILABLE', element: null }) as never;
+
+  it('opens at the head of the longest unbroken run', () => {
+    // 3 is isolated; 10..13 is the longest run.
+    const free = [seat('JA', 3), seat('JA', 10), seat('JA', 11), seat('JA', 12), seat('JA', 13)];
+    expect(pickCandidate(free)?.label).toBe('JA-10');
+  });
+
+  it('continues the row once a seat is held', () => {
+    const free = [seat('JA', 2), seat('JA', 11), seat('JA', 40)];
+    expect(pickCandidate(free, ['JA-10'])?.label).toBe('JA-11');
+  });
+
+  it('keeps building outward from the seats already held', () => {
+    const free = [seat('JA', 13), seat('JA', 30)];
+    expect(pickCandidate(free, ['JA-10', 'JA-11', 'JA-12'])?.label).toBe('JA-13');
+  });
+
+  it('ignores seats held in a different coach when judging adjacency', () => {
+    // UMA-53 must not drag the choice; only this coach's numbering matters.
+    const free = [seat('SCHA', 5), seat('SCHA', 6), seat('SCHA', 7)];
+    expect(pickCandidate(free, ['UMA-53', 'CHA-66'])?.label).toBe('SCHA-5');
+  });
+
+  it('is deterministic — the same grid always yields the same seat', () => {
+    const free = [seat('JA', 8), seat('JA', 9), seat('JA', 20)];
+    const picks = new Set(Array.from({ length: 10 }, () => pickCandidate(free)?.label));
+    expect(picks.size).toBe(1);
+  });
+
+  it('returns nothing when no seat is free', () => {
+    expect(pickCandidate([])).toBeUndefined();
   });
 });
 
