@@ -419,6 +419,34 @@ function lostMessage(panel: HTMLElement): string | null {
  * those resolves in the time it takes the page to repaint, and the caller moves straight to the
  * next seat. The timeout remains only as a backstop for a genuinely unresponsive server.
  */
+/**
+ * Re-resolve the panel handles if a re-render detached them.
+ *
+ * Angular rebuilds the panel subtree as seats are picked, so every cached handle - panel,
+ * details table, coach select - can go stale between one click and the next.
+ */
+function refreshHandles(context: ClaimContext): void {
+  const panelOk = context.panel.isConnected;
+  const detailsOk = !context.detailsPanel || context.detailsPanel.isConnected;
+  if (panelOk && detailsOk) return;
+
+  const fresh = resolveSeatPanel();
+  if (!fresh) return;
+  context.panel = fresh.panel;
+  context.detailsPanel = fresh.detailsPanel;
+  context.coachSelect = fresh.coachSelect;
+}
+
+/** Find a seat by its label in the panel as it exists right now. */
+function findSeatByLabel(panel: HTMLElement, label: string): HTMLElement | null {
+  for (const element of findSeatElements(panel)) {
+    if ((element.textContent ?? '').trim().toUpperCase().replace(/\s+/g, '') === label) {
+      return element;
+    }
+  }
+  return null;
+}
+
 async function awaitSeatOutcome(
   context: ClaimContext,
   seat: SeatCell,
@@ -426,16 +454,30 @@ async function awaitSeatOutcome(
 ): Promise<SeatOutcome> {
   const outcome = await waitFor<SeatOutcome>(
     () => {
+      refreshHandles(context);
+
       // Granted: the site's own summary lists it. This is the authority.
       if (context.detailsPanel && readClaimedSeats(context.detailsPanel).includes(seat.label)) {
         return 'GRANTED';
       }
 
-      // The seat vanished from the DOM - the grid re-rendered underneath us. Re-scan rather
-      // than sit here waiting on a detached node.
-      if (!seat.element.isConnected) return 'LOST';
+      /**
+       * Never read a detached element as a loss.
+       *
+       * The previous version returned LOST the moment seat.element left the DOM. But the element
+       * is detached precisely BECAUSE the panel re-rendered - which is what a successful pick
+       * looks like. Every claimed seat was therefore recorded as lost, the confirmed count never
+       * advanced, and the engine kept claiming: a request for 4 seats took 20 in a test that
+       * re-renders on every click. Identity does not survive a re-render; the label does.
+       */
+      const live = seat.element.isConnected
+        ? seat.element
+        : findSeatByLabel(context.panel, seat.label);
 
-      const state = stateOf(seat.element, legend);
+      // Not re-rendered yet - keep waiting rather than concluding anything.
+      if (!live) return null;
+
+      const state = stateOf(live, legend);
       if (state === 'SELECTED') return 'GRANTED';
 
       // Lost: somebody else got it, or is holding it right now.
@@ -558,7 +600,10 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
   const legend = readLegend(context.panel);
 
   /** What the site's own summary says we hold. Empty when the panel is missing or lagging. */
-  const held = (): string[] => readClaimedSeats(context.detailsPanel);
+  const held = (): string[] => {
+    refreshHandles(context);
+    return readClaimedSeats(context.detailsPanel);
+  };
   let confirmed: string[] = held();
 
   /** Re-resolve the coach picker if a re-render replaced it. */
@@ -716,6 +761,20 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
         if (cells.length > 0 && cells.every((c) => c.state === 'UNKNOWN')) {
           logger.error('Seat states could not be classified - stopping instead of clicking blind');
           return { confirmed, attempted, coachesTried, stopReason: 'UNCLASSIFIABLE' };
+        }
+
+        /**
+         * Hard cap, independent of our own bookkeeping.
+         *
+         * The page itself shows which seats are selected. If it already shows the target number,
+         * stop clicking whatever our counters believe - a bookkeeping bug must never turn into
+         * claiming more seats than the user asked for, or more than the site's 4-seat limit.
+         */
+        const selectedOnPage = cells.filter((c) => c.state === 'SELECTED');
+        if (selectedOnPage.length >= context.targetSeats) {
+          confirmed = selectedOnPage.map((c) => c.label);
+          logger.info(`Page shows ${confirmed.length} seat(s) selected - target reached`);
+          break;
         }
 
         const free = cells.filter((c) => c.state === 'AVAILABLE' && !rejected.has(c.label));

@@ -360,6 +360,88 @@ describe('seat adjacency', () => {
   });
 });
 
+/**
+ * The observed failure: UMA-1, then SCHA-1, then CHA-11 — one seat from each of three coaches,
+ * while UMA showed 29 free seats. One seat per coach is the signature of the pass loop deciding
+ * the coach is exhausted immediately after the first claim.
+ *
+ * The suspected mechanism is that Angular replaces the panel subtree when a seat is picked, so
+ * the cached panel handle goes stale, the next scan reads an empty grid, and the engine concludes
+ * the coach has nothing left. This reproduces exactly that.
+ */
+describe('a panel replaced between clicks', () => {
+  /** Rebuilds the whole panel on every seat click, detaching the previous one. */
+  function rerenderingPanel(freeCount: number): HTMLElement {
+    const state = new Map<number, 'available' | 'selected'>();
+    for (let i = 1; i <= freeCount; i++) state.set(i, 'available');
+
+    const render = (): HTMLElement => {
+      const old = document.getElementById('wrap');
+      const wrap = document.createElement('div');
+      wrap.id = 'wrap';
+
+      const label = document.createElement('label');
+      label.textContent = 'Select Coach';
+      const select = document.createElement('select');
+      select.id = 'coach';
+      const option = document.createElement('option');
+      option.value = 'JA';
+      option.textContent = `JA - ${freeCount} Seat(s)`;
+      select.append(option);
+
+      const grid = document.createElement('div');
+      for (const [n, s] of state) {
+        const seat = document.createElement('button');
+        seat.className = `btn-seat seat-${s === 'selected' ? 'selected seat-available' : 'available'}`;
+        seat.textContent = `JA-${n}`;
+        seat.addEventListener('click', () => {
+          state.set(n, 'selected');
+          render();
+        });
+        grid.append(seat);
+      }
+
+      const details = document.createElement('div');
+      details.id = 'details';
+      details.textContent =
+        'Seat Details ' +
+        [...state.entries()].filter(([, s]) => s === 'selected').map(([n]) => `JA-${n}`).join(' ');
+
+      const commit = document.createElement('button');
+      commit.textContent = 'CONTINUE PURCHASE';
+
+      wrap.append(label, select, grid, details, commit);
+      document.body.append(wrap);
+
+      // Detach the previous panel, exactly as a framework re-render would.
+      if (old) {
+        old.innerHTML = '';
+        old.remove();
+      }
+      return wrap;
+    };
+
+    return render();
+  }
+
+  it('keeps filling the same coach instead of hopping after one seat', async () => {
+    const panel = rerenderingPanel(20);
+
+    const outcome = await claimSeats({
+      panel,
+      coachSelect: panel.querySelector('#coach') as HTMLSelectElement,
+      detailsPanel: panel.querySelector('#details') as HTMLElement,
+      targetSeats: 4,
+      policy: 'PREFER_SINGLE_ALLOW_SPLIT',
+    });
+
+    expect(outcome.confirmed).toHaveLength(4);
+    expect(outcome.coachesTried.length).toBeLessThanOrEqual(1);
+    // All four from the one coach, and consecutive.
+    expect(outcome.confirmed.every((label) => label.startsWith('JA-'))).toBe(true);
+  });
+});
+
 describe('reading the site Seat Details table', () => {
   it('extracts the seats the site says we hold', () => {
     document.body.innerHTML = `
