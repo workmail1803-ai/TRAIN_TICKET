@@ -480,11 +480,8 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
 
   const legend = readLegend(context.panel);
 
-  /** Authoritative count of what we hold, straight from the site's summary. */
-  const held = (): string[] => {
-    const fromSite = readClaimedSeats(context.detailsPanel);
-    return fromSite.length > 0 || context.detailsPanel ? fromSite : [];
-  };
+  /** What the site's own summary says we hold. Empty when the panel is missing or lagging. */
+  const held = (): string[] => readClaimedSeats(context.detailsPanel);
   let confirmed: string[] = held();
 
   /** Re-resolve the coach picker if a re-render replaced it. */
@@ -619,7 +616,22 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
         const nowHeld = held();
 
         if (outcome === 'GRANTED' || nowHeld.length > confirmed.length) {
-          confirmed = nowHeld.length >= confirmed.length ? nowHeld : [...confirmed, seat.label];
+          /**
+           * The site's summary wins WHEN IT HAS SOMETHING TO SAY; otherwise keep our own record.
+           *
+           * The previous line read `nowHeld.length >= confirmed.length ? nowHeld : ...`, which
+           * discarded a granted seat whenever the summary was empty - both when the Seat Details
+           * panel could not be resolved at all, and when the table simply lagged a beat behind
+           * the click. With confirmed stuck at 0 the target was never reached, so the loop kept
+           * claiming seats: it under-reported to the user AND could hold more than the requested
+           * number. A granted seat must never vanish from the count.
+           */
+          confirmed =
+            nowHeld.length > 0
+              ? nowHeld
+              : confirmed.includes(seat.label)
+                ? confirmed
+                : [...confirmed, seat.label];
           lostRaces = 0;
           context.onSeatConfirmed?.(seat.label, confirmed.length);
           logger.info(`Seat confirmed ${seat.label} (${confirmed.length}/${context.targetSeats})`);

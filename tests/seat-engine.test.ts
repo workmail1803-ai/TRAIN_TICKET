@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
+  claimSeats,
   classifySeats,
   findSeatElements,
   parseCoachOption,
@@ -214,6 +215,63 @@ describe('race outcome signals', () => {
       .map((c) => c.label);
 
     expect(free).toEqual(['DA-1', 'DA-4']);
+  });
+});
+
+/**
+ * Regression: a granted seat used to vanish from the count whenever the site's Seat Details
+ * summary was empty — either because the panel could not be resolved, or because the table
+ * lagged a beat behind the click. With the count stuck at zero the target was never reached, so
+ * the loop kept claiming: it under-reported to the user AND could hold more seats than requested.
+ */
+describe('claiming without a Seat Details panel', () => {
+  function grid(available: number, booked: number): HTMLElement {
+    const seats = [];
+    for (let i = 1; i <= available; i++) seats.push(`<button class="seat available">DA-${i}</button>`);
+    for (let i = 1; i <= booked; i++) {
+      seats.push(`<button class="seat booked">DA-${available + i}</button>`);
+    }
+    document.body.innerHTML = `<div id="panel"><div class="grid">${seats.join('')}</div></div>`;
+
+    const panel = document.getElementById('panel') as HTMLElement;
+    // The site marks a seat selected when the claim succeeds.
+    panel.querySelectorAll('.seat.available').forEach((el) => {
+      el.addEventListener('click', () => {
+        (el as HTMLElement).className = 'seat selected';
+      });
+    });
+    return panel;
+  }
+
+  const ctx = (panel: HTMLElement, targetSeats: number) => ({
+    panel,
+    coachSelect: null,
+    detailsPanel: null,
+    targetSeats,
+    policy: 'PREFER_SINGLE_ALLOW_SPLIT' as const,
+  });
+
+  it('counts a granted seat when the summary table is unavailable', async () => {
+    const outcome = await claimSeats(ctx(grid(3, 1), 2));
+
+    expect(outcome.confirmed).toHaveLength(2);
+    expect(outcome.stopReason).toBe('TARGET_REACHED');
+  });
+
+  it('never claims more than the requested number of seats', async () => {
+    const panel = grid(10, 0);
+    const outcome = await claimSeats(ctx(panel, 4));
+
+    expect(outcome.confirmed).toHaveLength(4);
+    // The decisive check: exactly four seats are held on the page, not ten.
+    expect(panel.querySelectorAll('.seat.selected')).toHaveLength(4);
+  });
+
+  it('reports what it secured when fewer seats exist than requested', async () => {
+    const outcome = await claimSeats(ctx(grid(2, 5), 4));
+
+    expect(outcome.confirmed).toHaveLength(2);
+    expect(outcome.stopReason).toBe('NO_MORE_SEATS');
   });
 });
 
