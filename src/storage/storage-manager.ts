@@ -34,6 +34,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     partial: 'TAKE_AVAILABLE_THEN_STOP',
     // Chosen by the user: any 4 beats 4 together, but prefer one coach when possible.
     coachSpread: 'PREFER_SINGLE_ALLOW_SPLIT',
+    // No named-coach preference by default.
+    preferredCoach: '',
   },
   schedule: {
     openTimeBST: '08:00:00',

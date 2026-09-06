@@ -180,6 +180,14 @@ export interface SeatPolicy {
   targetSeats: number;
   partial: PartialPolicy;
   coachSpread: CoachSpreadPolicy;
+  /**
+   * Coach code to try first, e.g. "KHA". Empty means no preference.
+   *
+   * A preference, not a restriction: if the coach has no free seats it is skipped and the normal
+   * ranking takes over. Independent of coachSpread, which governs what happens after the first
+   * coach is chosen.
+   */
+  preferredCoach: string;
 }
 
 export interface ScheduleConfig {

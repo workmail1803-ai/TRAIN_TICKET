@@ -65,6 +65,7 @@
               <option value="TAKE_AND_KEEP_TRYING">Take available, keep trying for the rest</option>
             </select>
           </label>
+          <label>Preferred coach (optional)<input id="preferredCoach" type="text" placeholder="e.g. KHA — blank for none" /></label>
           <label>Coach spread
             <select id="coachSpread">
               <option value="PREFER_SINGLE_ALLOW_SPLIT">Prefer one coach, split if needed</option>
@@ -74,8 +75,13 @@
           </label>
         </div>
         <p class="hint">
-          Never set above what your account is allowed to buy. The extension does not attempt to
-          exceed the site's own limit and stops with the real error if the site refuses.
+          Never set above what your account is allowed to buy — the site states a maximum of 4
+          seats per booking. The extension does not attempt to exceed that.
+        </p>
+        <p class="hint">
+          <strong>Preferred coach</strong> is tried first when it has free seats; if it is full the
+          next available coach is used instead. It never limits you to that coach. Leave it blank
+          unless you actually care which coach you get.
         </p>
       </section>
 

@@ -1002,6 +1002,7 @@ export class BookingEngine {
       detailsPanel: handles.detailsPanel,
       targetSeats: config.seatPolicy.targetSeats,
       policy: config.seatPolicy.coachSpread,
+      preferredCoach: config.seatPolicy.preferredCoach,
       signal: this.abort?.signal,
       onSeatConfirmed: (label, count) => {
         // Progress only - the authoritative list comes back in the outcome.

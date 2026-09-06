@@ -83,6 +83,45 @@ describe('coach ranking', () => {
     const empty = coaches.map((c) => ({ ...c, freeSeats: 0 }));
     expect(rankCoaches(empty, 4, 'PREFER_SINGLE_ALLOW_SPLIT')).toHaveLength(0);
   });
+
+  describe('named coach preference', () => {
+    it('puts the preferred coach first when it has seats', () => {
+      const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT', 'GA');
+      expect(ranked[0]!.code).toBe('GA'); // only 2 free — would otherwise rank third
+    });
+
+    it('falls through to the next available coach when the preferred one is full', () => {
+      const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT', 'KHA'); // KHA has 0
+      expect(ranked[0]!.code).toBe('JHA'); // normal ranking resumes
+      expect(ranked.some((c) => c.code === 'KHA')).toBe(false);
+    });
+
+    it('is a preference, not a restriction — every other coach still follows', () => {
+      const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT', 'GA');
+      expect(ranked.map((c) => c.code)).toEqual(['GA', 'JHA', 'GHA', 'CHA']);
+    });
+
+    it('matches case-insensitively', () => {
+      expect(rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT', 'gha')[0]!.code).toBe('GHA');
+    });
+
+    it('ignores a coach code that does not exist on this train', () => {
+      const ranked = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT', 'ZZZ');
+      expect(ranked.map((c) => c.code)).toEqual(['JHA', 'GHA', 'GA', 'CHA']);
+    });
+
+    it('leaves the order untouched when no preference is set', () => {
+      const withPref = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT', '');
+      const without = rankCoaches(coaches, 4, 'PREFER_SINGLE_ALLOW_SPLIT');
+      expect(withPref.map((c) => c.code)).toEqual(without.map((c) => c.code));
+    });
+
+    it('still respects SINGLE_ONLY — a preferred coach too small is not promoted', () => {
+      // GA has 2 free and the party needs 4, so SINGLE_ONLY excludes it entirely.
+      const ranked = rankCoaches(coaches, 4, 'SINGLE_ONLY', 'GA');
+      expect(ranked.map((c) => c.code)).toEqual(['JHA', 'GHA']);
+    });
+  });
 });
 
 describe('seat element discovery', () => {

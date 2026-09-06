@@ -74,27 +74,49 @@ export function parseCoaches(select: HTMLSelectElement): CoachOption[] {
 export function rankCoaches(
   coaches: CoachOption[],
   remaining: number,
-  policy: CoachSpreadPolicy
+  policy: CoachSpreadPolicy,
+  preferredCoach = ''
 ): CoachOption[] {
   const withSeats = coaches.filter((c) => c.freeSeats > 0);
 
-  if (policy === 'SINGLE_ONLY') {
-    return withSeats.filter((c) => c.freeSeats >= remaining).sort((a, b) => a.freeSeats - b.freeSeats);
-  }
-  if (policy === 'ANY') {
-    return withSeats.sort((a, b) => b.freeSeats - a.freeSeats);
-  }
+  const byPolicy = (): CoachOption[] => {
+    if (policy === 'SINGLE_ONLY') {
+      return withSeats
+        .filter((c) => c.freeSeats >= remaining)
+        .sort((a, b) => a.freeSeats - b.freeSeats);
+    }
+    if (policy === 'ANY') {
+      return withSeats.sort((a, b) => b.freeSeats - a.freeSeats);
+    }
 
-  const fits = withSeats
-    .filter((c) => c.freeSeats >= remaining)
-    // Smallest sufficient coach first: leaves the roomier coaches for other parties and
-    // makes no difference to us.
-    .sort((a, b) => a.freeSeats - b.freeSeats);
-  const rest = withSeats
-    .filter((c) => c.freeSeats < remaining)
-    .sort((a, b) => b.freeSeats - a.freeSeats);
+    const fits = withSeats
+      .filter((c) => c.freeSeats >= remaining)
+      // Smallest sufficient coach first: leaves the roomier coaches for other parties and
+      // makes no difference to us.
+      .sort((a, b) => a.freeSeats - b.freeSeats);
+    const rest = withSeats
+      .filter((c) => c.freeSeats < remaining)
+      .sort((a, b) => b.freeSeats - a.freeSeats);
 
-  return [...fits, ...rest];
+    return [...fits, ...rest];
+  };
+
+  const ordered = byPolicy();
+
+  /**
+   * A named coach goes first when it has seats.
+   *
+   * A preference, not a restriction. A coach with nothing free never reaches this list, so an
+   * unavailable favourite is simply skipped and the next-best coach is used - which is the
+   * behaviour asked for. It also never suppresses a coach: the rest of the order is unchanged.
+   */
+  const wanted = preferredCoach.trim().toUpperCase();
+  if (!wanted) return ordered;
+
+  const favourite = ordered.find((c) => c.code === wanted);
+  if (!favourite) return ordered;
+
+  return [favourite, ...ordered.filter((c) => c !== favourite)];
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +362,8 @@ export interface ClaimContext {
   detailsPanel: HTMLElement | null;
   targetSeats: number;
   policy: CoachSpreadPolicy;
+  /** Coach code to try first, e.g. "KHA". Empty or absent means no preference. */
+  preferredCoach?: string;
   signal?: AbortSignal;
   onSeatConfirmed?: (label: string, index: number) => void;
 }
@@ -522,13 +546,28 @@ export async function claimSeats(context: ClaimContext): Promise<ClaimOutcome> {
       break;
     }
 
-    // Try the coach already on screen first when it can help - saves a full grid redraw.
-    const ranked = rankCoaches(coaches, remaining, context.policy);
+    const preferred = (context.preferredCoach ?? '').trim();
+    const ranked = rankCoaches(coaches, remaining, context.policy, preferred);
     const currentCoach = coaches.find((c) => c.value === select?.value);
+
+    /**
+     * Try the coach already on screen first when it can help - it saves a full grid redraw.
+     * But an explicit coach preference outranks that optimisation: saving a redraw is not worth
+     * silently ignoring what the user asked for.
+     */
     const order =
-      currentCoach && currentCoach.freeSeats > 0
+      !preferred && currentCoach && currentCoach.freeSeats > 0
         ? [currentCoach, ...ranked.filter((c) => c.value !== currentCoach.value)]
         : ranked;
+
+    if (sweep === 0 && preferred) {
+      const favourite = coaches.find((c) => c.code === preferred.toUpperCase());
+      logger.info(
+        favourite && favourite.freeSeats > 0
+          ? `Preferred coach ${favourite.code} has ${favourite.freeSeats} free seat(s) - trying it first`
+          : `Preferred coach ${preferred.toUpperCase()} has no free seats - using the next available coach`
+      );
+    }
 
     const queue = order.length > 0 ? order : [null];
 

@@ -82,6 +82,7 @@ function render(config: AppConfig): void {
 
   $<HTMLInputElement>('targetSeats').value = String(config.seatPolicy.targetSeats);
   $<HTMLSelectElement>('partial').value = config.seatPolicy.partial;
+  $<HTMLInputElement>('preferredCoach').value = config.seatPolicy.preferredCoach;
   $<HTMLSelectElement>('coachSpread').value = config.seatPolicy.coachSpread;
 
   $<HTMLInputElement>('openTime').value = config.schedule.openTimeBST;
@@ -130,6 +131,8 @@ function collect(previous: AppConfig): AppConfig {
       // Clamped, not merely validated: the extension never attempts more than 4.
       targetSeats: Math.min(4, Math.max(1, Number.isFinite(seats) ? seats : 4)),
       partial: $<HTMLSelectElement>('partial').value as AppConfig['seatPolicy']['partial'],
+      // Coach codes are upper-case on the site; normalise so "kha" still matches.
+      preferredCoach: $<HTMLInputElement>('preferredCoach').value.trim().toUpperCase(),
       coachSpread: $<HTMLSelectElement>('coachSpread').value as AppConfig['seatPolicy']['coachSpread'],
     },
     schedule: {
